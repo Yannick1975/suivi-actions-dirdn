@@ -7,6 +7,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
 :root{
   --bg:#f5f6f8; --panel:#fff; --ink:#1b1f27; --muted:#667085; --line:#e4e7ec; --soft:#f2f4f7;
@@ -20,6 +23,7 @@
   --radius:10px;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 button,input,select,textarea{font:inherit;color:inherit}
 header.top{background:var(--accent);color:#fff;padding:18px 24px 0}
@@ -144,7 +148,10 @@ h4.section{margin:6px 0 10px;font-size:14px}
 .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1b1f27;color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:60}
 .toast.show{opacity:1}
 .notice{background:#fffaeb;border:1px solid #fedf89;color:#93370d;border-radius:8px;padding:9px 12px;font-size:12.5px;margin-bottom:14px;display:none}
-.members-edit .mrow{display:grid;grid-template-columns:1fr 1.4fr;gap:8px;margin-bottom:8px}
+.members-edit .mrow{display:grid;grid-template-columns:1fr 1.4fr auto;gap:8px;margin-bottom:8px;align-items:center}
+.savestate{font-size:12px;color:var(--muted)}
+.savestate.ok{color:var(--done)}
+.savestate.err{color:var(--blocked)}
 @media (max-width:720px){
   header.top{padding:14px 14px 0} main{padding:14px}
   .modal .body{grid-template-columns:1fr}
@@ -164,6 +171,8 @@ h4.section{margin:6px 0 10px;font-size:14px}
     <button class="btn" id="importBtn" title="Importer les actions d'un fichier Excel au même format">⬆ Importer Excel</button>
     <button class="btn" id="exportBtn">⬇ Exporter Excel</button>
     <button class="btn" id="teamBtn">⚙ Équipe</button>
+    <span class="sync" id="userLbl"></span>
+    <button class="btn" id="logoutBtn" hidden>Déconnexion</button>
     <input type="file" id="fileIn" accept=".xlsx,.xls" hidden>
   </div>
   <nav class="tabs" id="tabs"></nav>
@@ -200,8 +209,8 @@ h4.section{margin:6px 0 10px;font-size:14px}
     <footer>
       <button type="button" class="btn danger" id="mDel">Supprimer</button>
       <span class="spacer"></span>
-      <button type="button" class="btn" data-close>Annuler</button>
-      <button type="submit" class="btn primary" id="mSave">Enregistrer</button>
+      <span class="savestate" id="mState"></span>
+      <button type="submit" class="btn primary" id="mSave">Fermer</button>
     </footer>
   </form>
 </div>
@@ -211,11 +220,11 @@ h4.section{margin:6px 0 10px;font-size:14px}
   <form class="modal" id="tForm" style="max-width:560px">
     <header><h3>Membres de l'équipe</h3><button type="button" class="x" data-close>×</button></header>
     <div class="body" style="display:block">
-      <p class="hint" style="margin-top:0;color:var(--muted);font-size:12.5px">Prénom affiché dans les onglets, et nom complet affiché en en-tête de la liste.</p>
+      <p class="hint" style="margin-top:0;color:var(--muted);font-size:12.5px">Prénom affiché dans les onglets, et nom complet affiché en en-tête de la liste. Les modifications sont enregistrées automatiquement.</p>
       <div class="members-edit" id="tRows"></div>
       <button type="button" class="btn small" id="tAdd">+ Ajouter un membre</button>
     </div>
-    <footer><span class="spacer"></span><button type="button" class="btn" data-close>Annuler</button><button class="btn primary" type="submit">Enregistrer</button></footer>
+    <footer><span class="savestate" id="tState"></span><span class="spacer"></span><button class="btn primary" type="submit">Fermer</button></footer>
   </form>
 </div>
 
@@ -228,11 +237,41 @@ h4.section{margin:6px 0 10px;font-size:14px}
   </div>
 </div>
 
+<!-- Connexion -->
+<div class="backdrop" id="lBack">
+  <div class="modal" style="max-width:420px;margin-top:10vh">
+    <header><h3>Suivi des actions — Team YHD</h3></header>
+    <form class="body" id="lForm" style="display:flex;flex-direction:column;gap:12px" autocomplete="on">
+      <p style="margin:0">Connectez-vous avec votre adresse professionnelle.</p>
+      <div class="f"><label for="lMail">Adresse e-mail</label><input type="email" id="lMail" autocomplete="username" required></div>
+      <div class="f"><label for="lPwd">Mot de passe</label><input type="password" id="lPwd" autocomplete="current-password" minlength="6"></div>
+      <div id="lMsg" class="calc" style="display:none"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="submit" class="btn primary" id="lIn">Se connecter</button>
+        <button type="button" class="btn" id="lUp">Créer mon compte</button>
+        <button type="button" class="btn small" id="lReset" style="border:0;background:none;color:var(--accent)">Mot de passe oublié ?</button>
+      </div>
+      <p class="hint" style="color:var(--muted);font-size:12px;margin:0">Première visite : saisissez votre adresse, choisissez un mot de passe (6 caractères minimum) puis « Créer mon compte ». Seules les adresses autorisées par l'administrateur ont accès aux données.</p>
+    </form>
+    <footer><span class="spacer"></span><button class="btn" id="loginBtn">Se connecter avec Google</button></footer>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 
 <script>
 (() => {
 "use strict";
+/* ===== Configuration Firebase : collez ici les valeurs de votre projet ===== */
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDfkJD3jcGv0qDtL84Cw69Gl-usOO7m6OY",
+  authDomain: "suivi-des-actions-team-yhd.firebaseapp.com",
+  projectId: "suivi-des-actions-team-yhd",
+  storageBucket: "suivi-des-actions-team-yhd.firebasestorage.app",
+  messagingSenderId: "966059304853",
+  appId: "1:966059304853:web:cdb28ba41959c32a4ab89c"
+};
+/* ========================================================================== */
 const DEFAULT_MEMBERS = [
   {id:"yannick", nom:"Yannick", complet:"Y. HUYGUES DESPOINTES"},
   {id:"pierre",  nom:"Pierre",  complet:"P. BLINKER"},
@@ -278,9 +317,9 @@ function isLate(a){ return a.echeance && a.echeance < todayISO() && statut(a)!==
 const code = n => "T-" + String(n).padStart(3,"0");
 function memberName(id){ const m=S.members.find(m=>m.id===id); return m?m.nom:id; }
 function toast(msg){ const t=$("#toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(toast._t); toast._t=setTimeout(()=>t.classList.remove("show"),2600); }
-function confirmBox(title,msg){
+function confirmBox(title,msg,html){
   return new Promise(res=>{
-    $("#cTitle").textContent=title; $("#cMsg").textContent=msg; $("#cBack").classList.add("open");
+    $("#cTitle").textContent=title; if(html) $("#cMsg").innerHTML=msg; else $("#cMsg").textContent=msg; $("#cBack").classList.add("open");
     const done=v=>{ $("#cBack").classList.remove("open"); $("#cYes").onclick=$("#cNo").onclick=null; res(v); };
     $("#cYes").onclick=()=>done(true); $("#cNo").onclick=()=>done(false);
   });
@@ -294,8 +333,6 @@ const Store = {
     let db=null;
     try{ db = window.claude && window.claude.use ? await window.claude.use("db") : null; }catch(e){ db=null; }
     if(db){
-      this.db=db; this.shared=true;
-      setSync(true,"Synchronisé avec l'équipe");
       try{
         const user = await window.claude.use("user");
         if(user && typeof user.can==="function"){
@@ -303,21 +340,99 @@ const Store = {
           if(w===false){ S.canWrite=false; showNotice("Vous avez un accès en lecture seule : vous pouvez consulter les actions mais pas les modifier."); }
         }
       }catch(e){}
-      db.collection("actions").onSnapshot(snap=>{
-        S.actions = snap.docs.map(d=>Object.assign({_id:d.id}, d.data()));
-        render();
-      }, err=>{ setSync(false,"Hors ligne"); showNotice("La synchronisation a été interrompue. Rechargez la page."); });
-      db.doc("config/equipe").onSnapshot(snap=>{
-        const d = snap.exists ? snap.data() : null;
-        if(d && Array.isArray(d.membres) && d.membres.length) S.members = d.membres.map(m=>({id:String(m.id),nom:String(m.nom||m.id),complet:String(m.complet||m.nom||m.id)}));
-        render();
-      }, ()=>{});
+      this.attach(db);
+    } else if(FIREBASE_CONFIG.apiKey && window.firebase){
+      this.initFirebase();
     } else {
       setSync(false,"Mode local (ce navigateur)");
       showNotice("Les données sont enregistrées uniquement dans ce navigateur. Ouvrez l'application depuis claude.ai pour partager les actions avec l'équipe.");
       try{ const raw=localStorage.getItem(LS_KEY); if(raw){ const o=JSON.parse(raw); S.actions=o.actions||[]; if(o.members&&o.members.length) S.members=o.members; } }catch(e){}
       render();
     }
+  },
+  unsubs:[],
+  attach(db){
+    this.db=db; this.shared=true;
+    setSync(true,"Synchronisé avec l'équipe");
+    const fail = err=>{
+      setSync(false,"Hors ligne");
+      if(err && err.code==="permission-denied") showNotice("Votre compte n'est pas autorisé à accéder aux actions de l'équipe. Demandez à l'administrateur d'ajouter votre adresse, puis rechargez la page.");
+      else showNotice("La synchronisation a été interrompue. Rechargez la page.");
+    };
+    this.unsubs.push(db.collection("actions").onSnapshot(snap=>{
+      S.actions = snap.docs.map(d=>Object.assign({_id:d.id}, d.data()));
+      render();
+    }, fail));
+    this.unsubs.push(db.doc("config/equipe").onSnapshot(snap=>{
+      const d = snap.exists ? snap.data() : null;
+      if(d && Array.isArray(d.membres) && d.membres.length) S.members = d.membres.map(m=>({id:String(m.id),nom:String(m.nom||m.id),complet:String(m.complet||m.nom||m.id)}));
+      render();
+    }, ()=>{}));
+  },
+  detach(){
+    this.unsubs.forEach(u=>{ try{u();}catch(e){} }); this.unsubs=[];
+    this.db=null; this.shared=false; S.actions=[]; S.members=DEFAULT_MEMBERS.slice(); render();
+  },
+  initFirebase(){
+    firebase.initializeApp(FIREBASE_CONFIG);
+    const auth=firebase.auth(), fs=firebase.firestore();
+    setSync(false,"Connexion requise");
+    $("#loginBtn").onclick = async ()=>{
+      const prov=new firebase.auth.GoogleAuthProvider();
+      try{ await auth.signInWithPopup(prov); }
+      catch(e){
+        if(e && (e.code==="auth/popup-blocked"||e.code==="auth/operation-not-supported-in-this-environment")) auth.signInWithRedirect(prov);
+        else if(e && e.code!=="auth/popup-closed-by-user" && e.code!=="auth/cancelled-popup-request") toast("Connexion impossible : "+(e.code||"erreur"));
+      }
+    };
+    $("#logoutBtn").onclick = ()=>auth.signOut();
+    const msg = (t,err)=>{ const m=$("#lMsg"); m.style.display=t?"block":"none"; m.innerHTML=t; m.style.color=err?"var(--blocked)":""; };
+    const ERR = {
+      "auth/invalid-credential":"Adresse ou mot de passe incorrect.", "auth/wrong-password":"Adresse ou mot de passe incorrect.",
+      "auth/user-not-found":"Aucun compte pour cette adresse : cliquez sur « Créer mon compte ».",
+      "auth/email-already-in-use":"Un compte existe déjà pour cette adresse : cliquez sur « Se connecter ».",
+      "auth/weak-password":"Mot de passe trop court (6 caractères minimum).", "auth/invalid-email":"Adresse e-mail invalide.",
+      "auth/missing-password":"Saisissez un mot de passe.", "auth/too-many-requests":"Trop de tentatives. Réessayez dans quelques minutes.",
+      "auth/operation-not-allowed":"Ce mode de connexion n'est pas activé dans Firebase."
+    };
+    const fail = e=>msg(esc(ERR[e&&e.code] || "Erreur : "+((e&&e.code)||"inconnue")), true);
+    const creds = ()=>[$("#lMail").value.trim().toLowerCase(), $("#lPwd").value];
+    $("#lForm").addEventListener("submit", async e=>{
+      e.preventDefault(); const [m,p]=creds(); msg("Connexion…");
+      try{ await auth.signInWithEmailAndPassword(m,p); }catch(err){ fail(err); }
+    });
+    $("#lUp").onclick = async ()=>{
+      const [m,p]=creds(); if(!m){ $("#lMail").focus(); return; }
+      msg("Création du compte…");
+      try{ await auth.createUserWithEmailAndPassword(m,p); }
+      catch(err){ fail(err); }
+    };
+    $("#lReset").onclick = async ()=>{
+      const [m]=creds(); if(!m){ msg("Saisissez d'abord votre adresse e-mail.", true); $("#lMail").focus(); return; }
+      try{ await auth.sendPasswordResetEmail(m); msg("Un e-mail de réinitialisation a été envoyé à <b>"+esc(m)+"</b> (pensez à vérifier les indésirables)."); }
+      catch(err){ fail(err); }
+    };
+    auth.onAuthStateChanged(async user=>{
+      if(user && !user.emailVerified){
+        const m=user.email; let sent=true;
+        try{ await user.sendEmailVerification(); }catch(e){ sent=false; }
+        await auth.signOut();
+        msg((sent?"Un e-mail de confirmation vient d'être envoyé à <b>"+esc(m)+"</b>. ":"Votre adresse <b>"+esc(m)+"</b> n'est pas encore confirmée (e-mail déjà envoyé récemment). ")
+          +"Cliquez sur le lien qu'il contient (pensez aux indésirables), puis revenez ici et cliquez sur « Se connecter ». Pour recevoir un nouvel e-mail, cliquez simplement à nouveau sur « Se connecter ».");
+        return;
+      }
+      if(user){
+        msg("");
+        $("#lBack").classList.remove("open");
+        $("#userLbl").textContent=user.email||""; $("#logoutBtn").hidden=false;
+        $("#notice").style.display="none";
+        this.attach(fs);
+      } else {
+        this.detach(); setSync(false,"Connexion requise");
+        $("#userLbl").textContent=""; $("#logoutBtn").hidden=true;
+        $("#lBack").classList.add("open");
+      }
+    });
   },
   saveLocal(){ try{ localStorage.setItem(LS_KEY, JSON.stringify({actions:S.actions, members:S.members})); }catch(e){} },
   clean(o){ const c={}; for(const k in o){ if(k!=="_id") c[k]=o[k]; } return c; },
@@ -341,7 +456,8 @@ async function safe(fn, okMsg){
   try{ await fn(); if(okMsg) toast(okMsg); return true; }
   catch(e){
     const c=e&&e.code;
-    if(c==="invalid_argument"){ S.canWrite=false; toast("Modification refusée : accès en lecture seule."); render(); }
+    if(c==="permission-denied") toast("Modification refusée : votre compte n'est pas autorisé.");
+    else if(c==="invalid_argument"){ S.canWrite=false; toast("Modification refusée : accès en lecture seule."); render(); }
     else if(c==="quota_exceeded") toast("Capacité de stockage atteinte : supprimez des actions terminées.");
     else toast("Échec de l'enregistrement, réessayez.");
     return false;
@@ -468,8 +584,8 @@ function render(){
   renderTabs();
   $("#todayLbl").textContent = "Liste consolidée au " + fmtDate(todayISO());
   const view=$("#view");
+  if(S.tab!=="equipe" && !S.members.some(m=>m.id===S.tab)) S.tab="equipe";
   const isTeam=S.tab==="equipe";
-  if(!isTeam && !S.members.some(m=>m.id===S.tab)) S.tab="equipe";
   const scope = isTeam ? S.actions.filter(a=>S.members.some(m=>m.id===a.membre)) : S.actions.filter(a=>a.membre===S.tab);
   const list = sorted(filtered(scope));
   const m = S.members.find(x=>x.id===S.tab);
@@ -490,7 +606,7 @@ function render(){
 document.addEventListener("click", e=>{
   const t=e.target.closest("[data-tab],[data-goto],[data-kpi],[data-sort],[data-mode],#addBtn,#clearF,tbody tr,.card,#exportBtn,#importBtn,#teamBtn,[data-close]");
   if(!t) return;
-  if(t.dataset.close!==undefined){ t.closest(".backdrop").classList.remove("open"); return; }
+  if(t.dataset.close!==undefined){ closeModal(t.closest(".backdrop")); return; }
   if(t.dataset.tab){ S.tab=t.dataset.tab; S.fProj=""; render(); return; }
   if(t.dataset.goto){ S.tab=t.dataset.goto; S.fProj=""; render(); window.scrollTo(0,0); return; }
   if(t.dataset.kpi!==undefined){ const k=t.dataset.kpi;
@@ -514,7 +630,8 @@ document.addEventListener("change", e=>{
   if(id==="fPrioSel"){ S.fPrio=e.target.value; render(); }
   if(id==="fProj"){ S.fProj=e.target.value; render(); }
 });
-document.addEventListener("keydown", e=>{ if(e.key==="Escape") document.querySelectorAll(".backdrop.open").forEach(b=>b.classList.remove("open")); });
+document.addEventListener("keydown", e=>{ if(e.key==="Escape") document.querySelectorAll(".backdrop.open:not(#lBack):not(#cBack)").forEach(closeModal); });
+function closeModal(b){ if(!b) return; if(b.id==="mBack") flushAction(); b.classList.remove("open"); }
 
 /* Kanban drag & drop */
 let dragId=null;
@@ -557,7 +674,7 @@ function openAction(a){
   const v=a?(Number(a.avancement)||0):0; $("#fAv").value=v; $("#fAvR").value=v;
   $("#fNotes").value=a?.notes||""; $("#fCom").value=a?.commentaire||"";
   $("#mDel").style.display = a && S.canWrite ? "" : "none";
-  $("#mSave").disabled = !S.canWrite;
+  clearTimeout(autoT); autoT=null; setState("");
   [...$("#mForm").elements].forEach(el=>{ if(el.tagName!=="BUTTON") el.disabled=!S.canWrite; });
   fillDatalists(membre); updCalc();
   $("#mBack").classList.add("open"); setTimeout(()=>$("#fTache").focus(),30);
@@ -580,49 +697,113 @@ $("#fAvR").addEventListener("input",()=>{ $("#fAv").value=$("#fAvR").value; updC
 $("#fAv").addEventListener("input",()=>{ $("#fAvR").value=$("#fAv").value; updCalc(); });
 ["#fDebut","#fEch","#fBloq"].forEach(s=>$(s).addEventListener("change",updCalc));
 $("#fMembre").addEventListener("change",()=>fillDatalists($("#fMembre").value));
-$("#mForm").addEventListener("submit", async e=>{
-  e.preventDefault(); if(!S.canWrite) return;
-  const tache=$("#fTache").value.trim(); if(!tache){ $("#fTache").focus(); return; }
-  const membre=$("#fMembre").value;
-  const base = editing ? Object.assign({},editing) : {createdAt:Date.now()};
-  if(!editing || editing.membre!==membre) base.num = nextNum(membre);
-  Object.assign(base, formObj(), {
-    membre, tache, projet:$("#fProjet").value.trim(), responsable:$("#fResp").value.trim(), dependance:$("#fDep").value.trim(),
-    priorite:$("#fPrio").value, notes:$("#fNotes").value.trim(), commentaire:$("#fCom").value.trim(), maj:Date.now()
+/* Enregistrement automatique */
+let autoT=null, saving=Promise.resolve();
+function setState(t,cls){ const el=$("#mState"); el.textContent=t; el.className="savestate"+(cls?" "+cls:""); }
+function saveAction(){
+  if(!S.canWrite) return saving;
+  const tache=$("#fTache").value.trim();
+  if(!tache){ setState("Saisissez la tâche pour enregistrer"); return saving; }
+  saving = saving.then(async ()=>{
+    const membre=$("#fMembre").value;
+    const base = editing ? Object.assign({},editing) : {createdAt:Date.now()};
+    if(!editing || editing.membre!==membre) base.num = nextNum(membre);
+    Object.assign(base, formObj(), {
+      membre, tache, projet:$("#fProjet").value.trim(), responsable:$("#fResp").value.trim(), dependance:$("#fDep").value.trim(),
+      priorite:$("#fPrio").value, notes:$("#fNotes").value.trim(), commentaire:$("#fCom").value.trim(), maj:Date.now()
+    });
+    setState("Enregistrement…");
+    const isNew=!editing;
+    const ok = await safe(()=>Store.put(base));
+    if(ok){
+      editing=base;
+      if(isNew && !S.actions.some(a=>a._id===base._id)) S.actions.push(Object.assign({},base));
+      $("#mTitle").textContent=`${code(base.num)} — ${memberName(base.membre)}`;
+      $("#mDel").style.display = S.canWrite ? "" : "none";
+      setState("✓ Enregistré", "ok");
+    } else setState("Non enregistré", "err");
   });
-  $("#mSave").disabled=true;
-  const ok = await safe(()=>Store.put(base), editing?"Action mise à jour":"Action ajoutée");
-  $("#mSave").disabled=false;
-  if(ok) $("#mBack").classList.remove("open");
-});
+  return saving;
+}
+function schedule(){ if(!$("#mBack").classList.contains("open")) return; clearTimeout(autoT); setState("Modifications…"); autoT=setTimeout(()=>{ autoT=null; saveAction(); }, 700); }
+function flushAction(){ if(autoT){ clearTimeout(autoT); autoT=null; saveAction(); } }
+$("#mForm").addEventListener("input", schedule);
+$("#mForm").addEventListener("change", schedule);
+$("#mForm").addEventListener("submit", e=>{ e.preventDefault(); closeModal($("#mBack")); });
 $("#mDel").addEventListener("click", async ()=>{
-  if(!editing) return;
+  clearTimeout(autoT); autoT=null;
+  if(!editing){ $("#mBack").classList.remove("open"); return; }
   const ok=await confirmBox("Supprimer l'action", `Supprimer définitivement ${code(editing.num)} « ${editing.tache} » ?`);
   if(!ok) return;
-  if(await safe(()=>Store.del(editing._id),"Action supprimée")) $("#mBack").classList.remove("open");
+  await saving;
+  if(await safe(()=>Store.del(editing._id),"Action supprimée")){ S.actions=S.actions.filter(x=>x._id!==editing._id); editing=null; $("#mBack").classList.remove("open"); render(); }
 });
 
 /* ---------- team modal ---------- */
-function teamRow(m){ return `<div class="mrow" data-mid="${esc(m.id||"")}"><input placeholder="Prénom (onglet)" value="${esc(m.nom||"")}" maxlength="40"><input placeholder="Nom complet (en-tête)" value="${esc(m.complet||"")}" maxlength="80"></div>`; }
+function teamRow(m){ return `<div class="mrow" data-mid="${esc(m.id||"")}"><input placeholder="Prénom (onglet)" value="${esc(m.nom||"")}" maxlength="40"><input placeholder="Nom complet (en-tête)" value="${esc(m.complet||"")}" maxlength="80"><button type="button" class="btn small danger" data-rm title="Retirer ce membre">Retirer</button></div>`; }
+function setTState(t,cls){ const el=$("#tState"); el.textContent=t; el.className="savestate"+(cls?" "+cls:""); }
 function openTeam(){
   if(!S.canWrite){ toast("Accès en lecture seule."); return; }
-  $("#tRows").innerHTML=S.members.map(teamRow).join(""); $("#tBack").classList.add("open");
+  $("#tRows").innerHTML=S.members.map(teamRow).join(""); setTState(""); $("#tBack").classList.add("open");
 }
-$("#tAdd").addEventListener("click",()=>$("#tRows").insertAdjacentHTML("beforeend",teamRow({})));
-$("#tForm").addEventListener("submit", async e=>{
-  e.preventDefault();
+function teamFromRows(){
   const list=[]; const used=new Set();
   for(const r of $("#tRows").querySelectorAll(".mrow")){
     const [a,b]=r.querySelectorAll("input"); const nom=a.value.trim(); if(!nom) continue;
-    let id=r.dataset.mid || ("m"+Date.now().toString(36)+Math.random().toString(36).slice(2,5));
-    if(used.has(id)) continue; used.add(id);
+    if(!r.dataset.mid) r.dataset.mid="m"+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+    const id=r.dataset.mid; if(used.has(id)) continue; used.add(id);
     list.push({id, nom, complet:b.value.trim()||nom});
   }
-  const removed=S.members.filter(m=>!used.has(m.id) && S.actions.some(a=>a.membre===m.id));
-  if(removed.length){ toast(`Impossible de retirer ${removed.map(m=>m.nom).join(", ")} : des actions lui sont encore attribuées.`); return; }
-  if(!list.length) return;
-  if(await safe(()=>Store.saveMembers(list),"Équipe mise à jour")) $("#tBack").classList.remove("open");
+  return list;
+}
+async function saveTeam(list){
+  if(!list.length) return false;
+  setTState("Enregistrement…");
+  const ok=await safe(()=>Store.saveMembers(list));
+  if(ok){ S.members=list; render(); setTState("✓ Enregistré","ok"); } else setTState("Non enregistré","err");
+  return ok;
+}
+$("#tAdd").addEventListener("click",()=>{ $("#tRows").insertAdjacentHTML("beforeend",teamRow({})); const r=$("#tRows").lastElementChild; r.querySelector("input").focus(); });
+$("#tRows").addEventListener("change", e=>{ if(e.target.matches("input")) saveTeam(teamFromRows()); });
+$("#tRows").addEventListener("click", async e=>{
+  const b=e.target.closest("[data-rm]"); if(!b) return;
+  const row=b.closest(".mrow"); const id=row.dataset.mid;
+  const m=S.members.find(x=>x.id===id);
+  if(!m){ row.remove(); return; }
+  const others=S.members.filter(x=>x.id!==id);
+  if(!others.length){ toast("L'équipe doit garder au moins un membre."); return; }
+  const acts=S.actions.filter(a=>a.membre===id);
+  let ok, choice="";
+  if(!acts.length){
+    ok=await confirmBox("Retirer un membre", `Retirer ${m.nom} de l'équipe ?`);
+  } else {
+    ok=await confirmBox("Retirer un membre",
+      `<p style="margin-top:0">${esc(m.nom)} a <b>${acts.length}</b> action(s). Que faire de ces actions ?</p>
+       <select id="rmTo" style="width:100%;border:1px solid #d0d5dd;border-radius:8px;padding:8px 10px">
+         ${others.map(o=>`<option value="${esc(o.id)}">Les attribuer à ${esc(o.nom)}</option>`).join("")}
+         <option value="__del">Les supprimer définitivement</option>
+       </select>`, true);
+    choice = ok ? (document.getElementById("rmTo")||{}).value : "";
+  }
+  if(!ok) return;
+  if(acts.length){
+    setTState("Enregistrement…");
+    let n = choice!=="__del" ? nextNum(choice) : 0;
+    for(const a of acts){
+      const done = choice==="__del"
+        ? await safe(()=>Store.del(a._id))
+        : await safe(()=>Store.put(Object.assign({},a,{membre:choice,num:n++,maj:Date.now()})));
+      if(!done){ setTState("Non enregistré","err"); return; }
+    }
+  }
+  row.remove();
+  if(await saveTeam(teamFromRows().filter(x=>x.id!==id))){
+    if(S.tab===id) S.tab="equipe";
+    render();
+    toast(`${m.nom} a été retiré de l'équipe`);
+  }
 });
+$("#tForm").addEventListener("submit", e=>{ e.preventDefault(); $("#tBack").classList.remove("open"); });
 
 /* ---------- Excel export ---------- */
 const HEAD=["ID","Tâche","Projet / organisme","Responsable","Dépendance","Priorité","Statut","Date de début","Échéance","Avancement","Notes","Commentaire","Durée prévue (j)"];
