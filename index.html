@@ -289,7 +289,7 @@ const S = {
   actions: [],          // {_id, ...fields}
   tab: "equipe",
   mode: "liste",
-  q: "", fStat: "", fPrio: "", fProj: "", onlyLate: false,
+  q: "", fStat: "", fPrio: "", fProj: "", fMem: "", onlyLate: false,
   sort: {key:"num", dir:1},
   canWrite: true
 };
@@ -313,6 +313,9 @@ function statut(a){
   const v=Number(a.avancement)||0;
   return v>=100 ? "Terminée" : v>0 ? "En cours" : "À faire";
 }
+function isDone(a){ return statut(a)==="Terminée"; }
+function doneDate(a){ if(a.termineeLe) return a.termineeLe; if(a.maj){ const d=new Date(a.maj); return new Date(d.getTime()-d.getTimezoneOffset()*6e4).toISOString().slice(0,10); } return ""; }
+function stampDone(a){ if(isDone(a)){ if(!a.termineeLe) a.termineeLe=todayISO(); } else a.termineeLe=""; return a; }
 function isLate(a){ return a.echeance && a.echeance < todayISO() && statut(a)!=="Terminée"; }
 const code = n => "T-" + String(n).padStart(3,"0");
 function memberName(id){ const m=S.members.find(m=>m.id===id); return m?m.nom:id; }
@@ -470,6 +473,7 @@ function renderTabs(){
   const tabs=$("#tabs"); const cnt=id=>S.actions.filter(a=>a.membre===id && statut(a)!=="Terminée").length;
   let h=`<button data-tab="equipe" class="${S.tab==="equipe"?"active":""}">Vue d'équipe<span class="count">${S.actions.filter(a=>statut(a)!=="Terminée").length}</span></button>`;
   for(const m of S.members) h+=`<button data-tab="${esc(m.id)}" class="${S.tab===m.id?"active":""}">${esc(m.nom)}<span class="count">${cnt(m.id)}</span></button>`;
+  h+=`<button data-tab="archives" class="${S.tab==="archives"?"active":""}" style="margin-left:auto">🗄 Archives<span class="count">${S.actions.filter(isDone).length}</span></button>`;
   tabs.innerHTML=h;
 }
 function counts(list){
@@ -487,12 +491,20 @@ function kpiHTML(list){
     <div class="kpi" style="cursor:default"><div class="lbl">Avancement moyen</div><div class="val">${c.avg}%</div></div>
   </div>`;
 }
+function archKpiHTML(list){
+  const mois=todayISO().slice(0,7), an=todayISO().slice(0,4);
+  const nM=list.filter(a=>doneDate(a).slice(0,7)===mois).length, nA=list.filter(a=>doneDate(a).slice(0,4)===an).length;
+  const late=list.filter(a=>a.echeance && doneDate(a) && doneDate(a)>a.echeance).length;
+  const box=(l,v,c)=>`<div class="kpi" style="cursor:default"><div class="lbl">${c?`<i class="sw" style="background:${c}"></i>`:""}${l}</div><div class="val">${v}</div></div>`;
+  return `<div class="kpis">${box("Actions archivées",list.length,ST_COL["Terminée"])}${box("Terminées ce mois-ci",nM)}${box("Terminées en "+an,nA)}${box("Terminées après l'échéance",late,"#fb6514")}</div>`;
+}
 function filtered(list){
   const q=S.q.trim().toLowerCase();
   return list.filter(a=>{
     if(S.fStat && statut(a)!==S.fStat) return false;
     if(S.fPrio && (a.priorite||"")!==S.fPrio) return false;
     if(S.fProj && (a.projet||"")!==S.fProj) return false;
+    if(S.fMem && a.membre!==S.fMem) return false;
     if(S.onlyLate && !isLate(a)) return false;
     if(q){ const hay=[code(a.num),a.tache,a.projet,a.responsable,a.dependance,a.notes,a.commentaire,memberName(a.membre)].join(" ").toLowerCase(); if(!hay.includes(q)) return false; }
     return true;
@@ -509,16 +521,24 @@ function sorted(list){
       case "debut": case "echeance": return a[key]||"9999";
       case "num": return (S.tab==="equipe"? memberName(a.membre)+"|" : "") + String(a.num).padStart(5,"0");
       case "membre": return memberName(a.membre);
+      case "termineeLe": return doneDate(a)||"0000";
       default: return String(a[key]||"").toLowerCase() || "￿";
     }
   };
   return list.slice().sort((x,y)=>{ const a=val(x),b=val(y); return (a<b?-1:a>b?1:0)*dir; });
 }
-function toolbarHTML(list){
+function toolbarHTML(list, arch){
   const projets=[...new Set(list.map(a=>a.projet).filter(Boolean))].sort((a,b)=>a.localeCompare(b,"fr"));
+  if(arch) return `<div class="toolbar">
+    <input type="search" id="q" placeholder="Rechercher dans les archives…" value="${esc(S.q)}">
+    <select id="fMem"><option value="">Tous les membres</option>${S.members.map(m=>`<option value="${esc(m.id)}" ${S.fMem===m.id?"selected":""}>${esc(m.nom)}</option>`).join("")}</select>
+    <select id="fPrioSel"><option value="">Toutes priorités</option>${["Haute","Moyenne","Basse"].map(s=>`<option ${S.fPrio===s?"selected":""}>${s}</option>`).join("")}</select>
+    <select id="fProj"><option value="">Tous projets</option>${projets.map(p=>`<option ${S.fProj===p?"selected":""}>${esc(p)}</option>`).join("")}</select>
+    ${(S.q||S.fMem||S.fPrio||S.fProj)?`<button class="btn small" id="clearF">Effacer les filtres</button>`:""}
+  </div>`;
   return `<div class="toolbar">
     <input type="search" id="q" placeholder="Rechercher une action, un projet, un responsable…" value="${esc(S.q)}">
-    <select id="fStat"><option value="">Tous statuts</option>${STATUTS.map(s=>`<option ${S.fStat===s?"selected":""}>${s}</option>`).join("")}</select>
+    <select id="fStat"><option value="">Tous statuts</option>${STATUTS.filter(s=>s!=="Terminée").map(s=>`<option ${S.fStat===s?"selected":""}>${s}</option>`).join("")}</select>
     <select id="fPrioSel"><option value="">Toutes priorités</option>${["Haute","Moyenne","Basse"].map(s=>`<option ${S.fPrio===s?"selected":""}>${s}</option>`).join("")}</select>
     <select id="fProj"><option value="">Tous projets</option>${projets.map(p=>`<option ${S.fProj===p?"selected":""}>${esc(p)}</option>`).join("")}</select>
     ${(S.q||S.fStat||S.fPrio||S.fProj||S.onlyLate)?`<button class="btn small" id="clearF">Effacer les filtres</button>`:""}
@@ -528,11 +548,11 @@ function toolbarHTML(list){
   </div>`;
 }
 function th(key,lbl){ const on=S.sort.key===key; return `<th data-sort="${key}">${lbl} <span class="arr">${on?(S.sort.dir>0?"▲":"▼"):""}</span></th>`; }
-function tableHTML(list, showMember){
+function tableHTML(list, showMember, arch){
   if(!list.length) return emptyHTML();
   return `<div class="panel tablewrap"><table><thead><tr>
     ${th("num","ID")}${showMember?th("membre","Liste"):""}${th("tache","Tâche")}${th("projet","Projet / organisme")}${th("responsable","Responsable")}
-    ${th("dependance","Dépendance")}${th("priorite","Priorité")}${th("statut","Statut")}${th("debut","Début")}${th("echeance","Échéance")}
+    ${th("dependance","Dépendance")}${th("priorite","Priorité")}${arch?th("termineeLe","Terminée le"):th("statut","Statut")}${th("debut","Début")}${th("echeance","Échéance")}
     ${th("avancement","Avancement")}${th("duree","Durée (j)")}<th class="nosort">Commentaire</th>
   </tr></thead><tbody>
   ${list.map(a=>{ const st=statut(a), late=isLate(a), v=Math.max(0,Math.min(100,Number(a.avancement)||0)), d=duree(a);
@@ -542,7 +562,7 @@ function tableHTML(list, showMember){
       <td class="task">${esc(a.tache)}${a.notes?`<div class="notes">${esc(a.notes)}</div>`:""}</td>
       <td>${esc(a.projet)}</td><td>${esc(a.responsable)}</td><td class="nowrap">${esc(a.dependance)}</td>
       <td>${a.priorite?`<span class="pr pr-${esc(a.priorite)}">${esc(a.priorite)}</span>`:""}</td>
-      <td><span class="pill ${ST_CLS[st]}">${st}</span></td>
+      <td class="nowrap">${arch?fmtDate(doneDate(a)):`<span class="pill ${ST_CLS[st]}">${st}</span>`}</td>
       <td class="nowrap">${fmtDate(a.debut)}</td>
       <td class="nowrap ${late?"late":""}">${fmtDate(a.echeance)}${late?`<span class="late-tag">retard</span>`:""}</td>
       <td><div class="prog"><div class="bar"><i class="${v>=100?"full":""}" style="width:${v}%"></i></div><span>${v}%</span></div></td>
@@ -553,6 +573,8 @@ function tableHTML(list, showMember){
 }
 function kanbanHTML(list, showMember){
   return `<div class="kanban">${STATUTS.map(s=>{ const items=list.filter(a=>statut(a)===s);
+    if(s==="Terminée") return `<div class="col" data-col="${s}"><h3><span class="pill ${ST_CLS[s]}">${s}</span></h3>
+      <div style="border:1px dashed #c7cdd6;border-radius:8px;padding:18px 12px;text-align:center;color:var(--muted);font-size:12.5px">Déposez une carte ici pour la terminer.<br>Elle passera dans l'onglet <b>🗄 Archives</b>.</div></div>`;
     return `<div class="col" data-col="${s}"><h3><span class="pill ${ST_CLS[s]}">${s}</span><span class="n">${items.length}</span></h3>
       ${items.map(a=>{ const late=isLate(a), v=Math.max(0,Math.min(100,Number(a.avancement)||0));
         return `<div class="card" draggable="${S.canWrite}" data-id="${esc(a._id)}">
@@ -565,6 +587,7 @@ function kanbanHTML(list, showMember){
     </div>`;}).join("")}</div>`;
 }
 function emptyHTML(){
+  if(S.tab==="archives") return `<div class="panel empty">${S.actions.some(isDone)?`<b>Aucune archive ne correspond aux filtres</b>Modifiez la recherche ou effacez les filtres.`:`<b>Aucune action archivée</b>Les actions passent ici automatiquement lorsqu'elles atteignent 100 %.`}</div>`;
   const any = S.tab==="equipe" ? S.actions.length : S.actions.some(a=>a.membre===S.tab);
   return `<div class="panel empty">${ any ? `<b>Aucune action ne correspond aux filtres</b>Modifiez la recherche ou effacez les filtres.`
     : `<b>Aucune action pour l'instant</b>Ajoutez une première action avec « + Nouvelle action », ou importez votre fichier Excel.` }</div>`;
@@ -584,38 +607,58 @@ function render(){
   renderTabs();
   $("#todayLbl").textContent = "Liste consolidée au " + fmtDate(todayISO());
   const view=$("#view");
-  if(S.tab!=="equipe" && !S.members.some(m=>m.id===S.tab)) S.tab="equipe";
+  if(S.tab!=="equipe" && S.tab!=="archives" && !S.members.some(m=>m.id===S.tab)) S.tab="equipe";
+  const focus = document.activeElement && document.activeElement.id==="q" ? document.activeElement.selectionStart : null;
+  if(S.tab==="archives"){
+    const arch=S.actions.filter(isDone);
+    view.innerHTML = `
+      <div class="member-head"><div><h2>🗄 Archives</h2>
+        <div class="meta">Actions terminées de toute l'équipe · cliquez sur une action pour la consulter, ou baissez son avancement sous 100 % pour la rouvrir</div></div></div>
+      ${archKpiHTML(arch)}
+      ${toolbarHTML(arch,true)}
+      ${tableHTML(sorted(filtered(arch)),true,true)}`;
+    if(focus!==null){ const q=$("#q"); q.focus(); try{q.setSelectionRange(focus,focus);}catch(e){} }
+    return;
+  }
   const isTeam=S.tab==="equipe";
   const scope = isTeam ? S.actions.filter(a=>S.members.some(m=>m.id===a.membre)) : S.actions.filter(a=>a.membre===S.tab);
-  const list = sorted(filtered(scope));
+  const active = scope.filter(a=>!isDone(a));
+  const list = sorted(filtered(active));
   const m = S.members.find(x=>x.id===S.tab);
-  const focus = document.activeElement && document.activeElement.id==="q" ? document.activeElement.selectionStart : null;
   view.innerHTML = `
     <div class="member-head"><div><h2>${isTeam?"Vue d'équipe":"Suivi des actions — "+esc(m.complet)}</h2>
       <div class="meta">${isTeam?"Toutes les actions de l'équipe, par collaborateur":"Liste de "+esc(m.nom)+" · complétez les échéances selon vos priorités"}</div></div></div>
     ${isTeam?teamOverviewHTML():""}
     ${kpiHTML(scope)}
-    ${isTeam?`<h4 class="section">Toutes les actions</h4>`:""}
-    ${toolbarHTML(scope)}
+    ${isTeam?`<h4 class="section">Actions en cours</h4>`:""}
+    ${toolbarHTML(active)}
     ${S.mode==="liste" ? tableHTML(list,isTeam) : kanbanHTML(list,isTeam)}
   `;
   if(focus!==null){ const q=$("#q"); q.focus(); try{q.setSelectionRange(focus,focus);}catch(e){} }
 }
 
 /* ---------- events ---------- */
+function goTab(tab){
+  const wasArch=S.tab==="archives";
+  S.tab=tab; S.fProj=""; S.fMem="";
+  if(S.fStat==="Terminée") S.fStat="";
+  if(tab==="archives"){ S.fStat=""; S.onlyLate=false; S.sort={key:"termineeLe",dir:-1}; }
+  else if(wasArch || S.sort.key==="termineeLe") S.sort={key:"num",dir:1};
+}
 document.addEventListener("click", e=>{
   const t=e.target.closest("[data-tab],[data-goto],[data-kpi],[data-sort],[data-mode],#addBtn,#clearF,tbody tr,.card,#exportBtn,#importBtn,#teamBtn,[data-close]");
   if(!t) return;
   if(t.dataset.close!==undefined){ closeModal(t.closest(".backdrop")); return; }
-  if(t.dataset.tab){ S.tab=t.dataset.tab; S.fProj=""; render(); return; }
-  if(t.dataset.goto){ S.tab=t.dataset.goto; S.fProj=""; render(); window.scrollTo(0,0); return; }
+  if(t.dataset.tab){ goTab(t.dataset.tab); render(); return; }
+  if(t.dataset.goto){ goTab(t.dataset.goto); render(); window.scrollTo(0,0); return; }
   if(t.dataset.kpi!==undefined){ const k=t.dataset.kpi;
+    if(k==="Terminée"){ const mem=S.tab!=="equipe"?S.tab:""; goTab("archives"); S.fMem=mem; render(); window.scrollTo(0,0); return; }
     if(k==="late"){ S.onlyLate=!S.onlyLate; } else if(k===""){ S.fStat=""; S.onlyLate=false; } else { S.fStat = S.fStat===k ? "" : k; }
     render(); return; }
   if(t.dataset.sort){ const k=t.dataset.sort; S.sort = S.sort.key===k ? {key:k,dir:-S.sort.dir} : {key:k,dir:1}; render(); return; }
   if(t.dataset.mode){ S.mode=t.dataset.mode; render(); return; }
   if(t.id==="addBtn"){ openAction(null); return; }
-  if(t.id==="clearF"){ S.q=S.fStat=S.fPrio=S.fProj=""; S.onlyLate=false; render(); return; }
+  if(t.id==="clearF"){ S.q=S.fStat=S.fPrio=S.fProj=S.fMem=""; S.onlyLate=false; render(); return; }
   if(t.id==="exportBtn"){ exportXlsx(); return; }
   if(t.id==="importBtn"){ if(!S.canWrite){ toast("Accès en lecture seule."); return; } $("#fileIn").click(); return; }
   if(t.id==="teamBtn"){ openTeam(); return; }
@@ -629,6 +672,7 @@ document.addEventListener("change", e=>{
   if(id==="fStat"){ S.fStat=e.target.value; render(); }
   if(id==="fPrioSel"){ S.fPrio=e.target.value; render(); }
   if(id==="fProj"){ S.fProj=e.target.value; render(); }
+  if(id==="fMem"){ S.fMem=e.target.value; render(); }
 });
 document.addEventListener("keydown", e=>{ if(e.key==="Escape") document.querySelectorAll(".backdrop.open:not(#lBack):not(#cBack)").forEach(closeModal); });
 function closeModal(b){ if(!b) return; if(b.id==="mBack") flushAction(); b.classList.remove("open"); }
@@ -649,8 +693,8 @@ document.addEventListener("drop", e=>{
   else if(to==="À faire") v=0;
   else if(to==="En cours"){ if(v<=0||v>=100) v=10; }
   else if(to==="Bloquée" && v>=100) v=90;
-  n.avancement=v; n.maj=Date.now();
-  safe(()=>Store.put(n), `${code(n.num)} → ${to}`);
+  n.avancement=v; n.maj=Date.now(); stampDone(n);
+  safe(()=>Store.put(n), to==="Terminée" ? `${code(n.num)} terminée → Archives` : `${code(n.num)} → ${to}`);
 });
 
 /* ---------- action modal ---------- */
@@ -712,6 +756,7 @@ function saveAction(){
       membre, tache, projet:$("#fProjet").value.trim(), responsable:$("#fResp").value.trim(), dependance:$("#fDep").value.trim(),
       priorite:$("#fPrio").value, notes:$("#fNotes").value.trim(), commentaire:$("#fCom").value.trim(), maj:Date.now()
     });
+    stampDone(base);
     setState("Enregistrement…");
     const isNew=!editing;
     const ok = await safe(()=>Store.put(base));
@@ -720,7 +765,7 @@ function saveAction(){
       if(isNew && !S.actions.some(a=>a._id===base._id)) S.actions.push(Object.assign({},base));
       $("#mTitle").textContent=`${code(base.num)} — ${memberName(base.membre)}`;
       $("#mDel").style.display = S.canWrite ? "" : "none";
-      setState("✓ Enregistré", "ok");
+      setState(isDone(base) ? "✓ Terminée : sera rangée dans les Archives" : "✓ Enregistré", "ok");
     } else setState("Non enregistré", "err");
   });
   return saving;
@@ -870,6 +915,7 @@ $("#fileIn").addEventListener("change", async e=>{
         priorite:["Haute","Moyenne","Basse"].includes(prio)?prio:"", bloquee: norm(st)==="bloquee",
         debut:toISO(g("debut")), echeance:toISO(g("ech")), avancement:Math.round(Math.max(0,Math.min(100,av))),
         notes:String(g("notes")).trim(), commentaire:String(g("com")).trim(), createdAt:Date.now(), maj:Date.now()});
+      stampDone(plan[plan.length-1]);
     }
   });
   if(!plan.length){ toast("Aucune action (colonne « Tâche » remplie) trouvée dans ce fichier."); return; }
